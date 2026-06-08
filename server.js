@@ -21,46 +21,55 @@ app.get("/", (req, res) => {
   res.send("AI Agent is working");
 });
 
-app.post("/ask-agent", upload.single("pdf"), async (req, res) => {
+app.post("/ask-agent", upload.array("pdfs", 10), async (req, res) => {
   try {
-    const { message, history } = req.body;
+    const { message, history, pdfContents } = req.body;
     const parsedHistory = history ? JSON.parse(history) : [];
+    const parsedPdfContents = pdfContents ? JSON.parse(pdfContents) : [];
 
     console.log("Question:", message);
 
+    // Build system instruction based on uploaded docs
+    const hasDocs =
+      parsedPdfContents.length > 0 || (req.files && req.files.length > 0);
+    const systemInstruction = hasDocs
+      ? "ענה אך ורק על סמך המסמכים שצורפו. אם המידע לא נמצא במסמכים, אמור זאת בבירור."
+      : undefined;
+
+    // Convert new uploaded files to base64
+    const newFileParts = (req.files || []).map((file) => {
+      const data = fs.readFileSync(file.path).toString("base64");
+      fs.unlinkSync(file.path);
+      return { inlineData: { mimeType: "application/pdf", data } };
+    });
+
+    // Convert stored base64 pdfs from previous turns
+    const storedFileParts = parsedPdfContents.map((pdf) => ({
+      inlineData: { mimeType: "application/pdf", data: pdf.data },
+    }));
+
+    const allFileParts = [...storedFileParts, ...newFileParts];
+
+    // Build contents — attach docs to first user message
     let contents = [];
 
-    if (req.file) {
-      // קרא את הPDF כ-base64
-      const pdfData = fs.readFileSync(req.file.path);
-      const base64Pdf = pdfData.toString("base64");
-
-      // מחק את הקובץ הזמני
-      fs.unlinkSync(req.file.path);
-
+    if (parsedHistory.length <= 1) {
+      // First message: attach all docs
       contents = [
-        ...parsedHistory.slice(0, -1).map((msg) => ({
-          role: msg.role === "assistant" ? "model" : "user",
-          parts: [{ text: msg.content }],
-        })),
         {
           role: "user",
-          parts: [
-            {
-              inlineData: {
-                mimeType: "application/pdf",
-                data: base64Pdf,
-              },
-            },
-            {
-              text: `ענה רק על סמך המסמך שצורף. השאלה: ${message}`,
-            },
-          ],
+          parts: [...allFileParts, { text: message }],
         },
       ];
     } else {
+      // Subsequent messages: re-attach docs to first message, rest is history
+      const [firstMsg, ...restHistory] = parsedHistory.slice(0, -1);
       contents = [
-        ...parsedHistory.slice(0, -1).map((msg) => ({
+        {
+          role: "user",
+          parts: [...allFileParts, { text: firstMsg?.content || "" }],
+        },
+        ...restHistory.map((msg) => ({
           role: msg.role === "assistant" ? "model" : "user",
           parts: [{ text: msg.content }],
         })),
@@ -74,6 +83,7 @@ app.post("/ask-agent", upload.single("pdf"), async (req, res) => {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-lite",
       contents,
+      ...(systemInstruction && { config: { systemInstruction } }),
     });
 
     res.json({ answer: response.text });
