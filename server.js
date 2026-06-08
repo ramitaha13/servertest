@@ -7,7 +7,7 @@ dotenv.config();
 
 const app = express();
 
-app.use(cors());
+app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 const ai = new GoogleGenAI({
@@ -24,7 +24,6 @@ app.post("/ask-agent", async (req, res) => {
 
     console.log("Question:", message);
 
-    // המר את ההיסטוריה לפורמט של Gemini
     const contents = [
       ...history.slice(0, -1).map((msg) => ({
         role: msg.role === "assistant" ? "model" : "user",
