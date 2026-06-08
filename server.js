@@ -1,14 +1,10 @@
 import express from "express";
-import cors from "cors";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
-import multer from "multer";
-import fs from "fs";
 
 dotenv.config();
 
 const app = express();
-const upload = multer({ dest: "uploads/" });
 
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
@@ -18,44 +14,28 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: "50mb" }));
+app.use(express.json({ limit: "100mb" }));
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 app.get("/", (req, res) => res.send("AI Agent is working"));
 
-app.post("/ask-agent", upload.array("pdfs", 10), async (req, res) => {
+app.post("/ask-agent", async (req, res) => {
   try {
-    const { message, history, pdfContents } = req.body;
-    const parsedHistory = history ? JSON.parse(history) : [];
-    const parsedPdfContents = pdfContents ? JSON.parse(pdfContents) : [];
+    const { message, history = [], pdfContents = [] } = req.body;
 
     console.log("Question:", message);
-    console.log(
-      "Docs:",
-      parsedPdfContents.length,
-      "History:",
-      parsedHistory.length,
-    );
+    console.log("Docs:", pdfContents.length, "History:", history.length);
 
-    const hasDocs =
-      parsedPdfContents.length > 0 || (req.files && req.files.length > 0);
+    const hasDocs = pdfContents.length > 0;
 
-    const newFileParts = (req.files || []).map((file) => {
-      const data = fs.readFileSync(file.path).toString("base64");
-      fs.unlinkSync(file.path);
-      return { inlineData: { mimeType: "application/pdf", data } };
-    });
-
-    const storedFileParts = parsedPdfContents.map((pdf) => ({
+    const allFileParts = pdfContents.map((pdf) => ({
       inlineData: { mimeType: "application/pdf", data: pdf.data },
     }));
 
-    const allFileParts = [...storedFileParts, ...newFileParts];
-
     let contents = [];
 
-    if (parsedHistory.length <= 1) {
+    if (history.length <= 1) {
       contents = [
         {
           role: "user",
@@ -63,7 +43,7 @@ app.post("/ask-agent", upload.array("pdfs", 10), async (req, res) => {
         },
       ];
     } else {
-      const [firstMsg, ...restHistory] = parsedHistory.slice(0, -1);
+      const [firstMsg, ...restHistory] = history.slice(0, -1);
       contents = [
         {
           role: "user",
@@ -73,10 +53,7 @@ app.post("/ask-agent", upload.array("pdfs", 10), async (req, res) => {
           role: msg.role === "assistant" ? "model" : "user",
           parts: [{ text: msg.content }],
         })),
-        {
-          role: "user",
-          parts: [{ text: message }],
-        },
+        { role: "user", parts: [{ text: message }] },
       ];
     }
 
@@ -95,7 +72,7 @@ app.post("/ask-agent", upload.array("pdfs", 10), async (req, res) => {
 
     res.json({ answer: response.text });
   } catch (error) {
-    console.error("ERROR:", error);
+    console.error("ERROR:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
