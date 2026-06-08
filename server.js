@@ -10,16 +10,19 @@ dotenv.config();
 const app = express();
 const upload = multer({ dest: "uploads/" });
 
-app.use(cors({ origin: "*" }));
-app.use(express.json());
-
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "*");
+  if (req.method === "OPTIONS") return res.sendStatus(200);
+  next();
 });
 
-app.get("/", (req, res) => {
-  res.send("AI Agent is working");
-});
+app.use(express.json({ limit: "50mb" }));
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+app.get("/", (req, res) => res.send("AI Agent is working"));
 
 app.post("/ask-agent", upload.array("pdfs", 10), async (req, res) => {
   try {
@@ -28,34 +31,31 @@ app.post("/ask-agent", upload.array("pdfs", 10), async (req, res) => {
     const parsedPdfContents = pdfContents ? JSON.parse(pdfContents) : [];
 
     console.log("Question:", message);
-    console.log("Question:", message);
+    console.log(
+      "Docs:",
+      parsedPdfContents.length,
+      "History:",
+      parsedHistory.length,
+    );
 
-    // Build system instruction based on uploaded docs
     const hasDocs =
       parsedPdfContents.length > 0 || (req.files && req.files.length > 0);
-    const systemInstruction = hasDocs
-      ? "ענה אך ורק על סמך המסמכים שצורפו. אם המידע לא נמצא במסמכים, אמור זאת בבירור."
-      : undefined;
 
-    // Convert new uploaded files to base64
     const newFileParts = (req.files || []).map((file) => {
       const data = fs.readFileSync(file.path).toString("base64");
       fs.unlinkSync(file.path);
       return { inlineData: { mimeType: "application/pdf", data } };
     });
 
-    // Convert stored base64 pdfs from previous turns
     const storedFileParts = parsedPdfContents.map((pdf) => ({
       inlineData: { mimeType: "application/pdf", data: pdf.data },
     }));
 
     const allFileParts = [...storedFileParts, ...newFileParts];
 
-    // Build contents — attach docs to first user message
     let contents = [];
 
     if (parsedHistory.length <= 1) {
-      // First message: attach all docs
       contents = [
         {
           role: "user",
@@ -63,12 +63,11 @@ app.post("/ask-agent", upload.array("pdfs", 10), async (req, res) => {
         },
       ];
     } else {
-      // Subsequent messages: re-attach docs to first message, rest is history
       const [firstMsg, ...restHistory] = parsedHistory.slice(0, -1);
       contents = [
         {
           role: "user",
-          parts: [...allFileParts, { text: firstMsg?.content || "" }],
+          parts: [...allFileParts, { text: firstMsg?.content || message }],
         },
         ...restHistory.map((msg) => ({
           role: msg.role === "assistant" ? "model" : "user",
@@ -81,21 +80,25 @@ app.post("/ask-agent", upload.array("pdfs", 10), async (req, res) => {
       ];
     }
 
+    const config = hasDocs
+      ? {
+          systemInstruction:
+            "ענה אך ורק על סמך המסמכים שצורפו. אם המידע לא נמצא במסמכים, אמור זאת בבירור.",
+        }
+      : undefined;
+
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-lite",
       contents,
-      ...(systemInstruction && { config: { systemInstruction } }),
+      ...(config && { config }),
     });
 
     res.json({ answer: response.text });
   } catch (error) {
-    console.error(error);
+    console.error("ERROR:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
 const PORT = process.env.PORT || 3001;
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
