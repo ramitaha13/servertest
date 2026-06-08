@@ -28,6 +28,7 @@ app.post("/ask-agent", upload.array("pdfs", 10), async (req, res) => {
     const parsedPdfContents = pdfContents ? JSON.parse(pdfContents) : [];
 
     console.log("Question:", message);
+    console.log("Question:", message);
 
     // Build system instruction based on uploaded docs
     const hasDocs =
